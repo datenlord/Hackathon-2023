@@ -6,3 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+clap = { version = "4.4.10", features = ["derive"] }
+libp2p={version="0.53.2",features = [ "async-std", "cbor", "dns", "kad", "noise", "macros", "request-response", "tcp", "websocket", "yamux"] }
+async-std = { version = "1.12", features = ["attributes"] }
+futures = "0.3.29"
+serde = { version = "1.0", features = ["derive"] }
