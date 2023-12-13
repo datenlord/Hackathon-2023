@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         node_type: NodeTypes::CommonNode,
     };
     //构建network节点
-    let (mut node_client, file_event_receiver, event_loop) = network::new().await?;
+    let (mut node_client, file_event_receiver, event_loop) = network::new(&options.node_type).await?;
 
     //运行第二层管道处理
     spawn(event_loop.run());

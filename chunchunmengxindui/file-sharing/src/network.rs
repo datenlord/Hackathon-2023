@@ -9,7 +9,7 @@ use libp2p::{
     noise,
     request_response::{self, OutboundRequestId, ProtocolSupport, ResponseChannel},
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
-    tcp, yamux, PeerId,
+    tcp, yamux, PeerId
 };
 
 use libp2p::StreamProtocol;
@@ -17,11 +17,23 @@ use serde::{Deserialize, Serialize};
 use std::collections::{hash_map, HashMap, HashSet};
 use std::error::Error;
 use std::time::Duration;
+use tracing::{debug, info};
 
-pub(crate) async fn new() -> Result<(Client, Receiver<Event>, EventLoop), Box<dyn Error>> {
+use crate::NodeTypes;
+
+pub(crate) async fn new(
+    nodeTypes: &NodeTypes,
+) -> Result<(Client, Receiver<Event>, EventLoop), Box<dyn Error>> {
     //创建一个秘钥对
-    let id_keys = identity::Keypair::generate_ed25519();
-    let peer_id = id_keys.public().to_peer_id();
+    let id_keys = match nodeTypes {
+        NodeTypes::Bootstrap => {
+            //通过这种方式让引导节点产生一个固定的peerID
+            let mut bytes = [0u8; 32];
+            bytes[0] = 1;
+            identity::Keypair::ed25519_from_bytes(bytes).unwrap()
+        }
+        NodeTypes::CommonNode => identity::Keypair::generate_ed25519(),
+    };
 
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(id_keys)
         .with_async_std()
@@ -31,10 +43,12 @@ pub(crate) async fn new() -> Result<(Client, Receiver<Event>, EventLoop), Box<dy
             yamux::Config::default,
         )?
         .with_behaviour(|key| Behaviour {
-            kademlia: kad::Behaviour::new(
-                peer_id,
-                kad::store::MemoryStore::new(key.public().to_peer_id()),
-            ),
+            kademlia: {
+                let mut cfg = kad::Config::default();
+                cfg.set_query_timeout(Duration::from_secs(5 * 60));
+                let store = kad::store::MemoryStore::new(key.public().to_peer_id());
+                kad::Behaviour::with_config(key.public().to_peer_id(), store, cfg)
+            },
             request_response: request_response::cbor::Behaviour::new(
                 [(
                     StreamProtocol::new("/file-exchange/1"),
@@ -57,7 +71,7 @@ pub(crate) async fn new() -> Result<(Client, Receiver<Event>, EventLoop), Box<dy
     Ok((
         Client {
             command_sender,
-            event_sender:event_sender.clone()
+            event_sender: event_sender.clone(),
         },
         event_receiver,
         EventLoop::new(swarm, command_receiver, event_sender),
@@ -123,14 +137,16 @@ impl Client {
             .send(Command::GetProviders { file_name, sender })
             .await
             .expect("Command receiver not to be dropped.");
-        receiver.await.expect("Sender not to be dropped.")
+        let provides = receiver.await.expect("Sender not to be dropped.");
+        debug!("该文件有如下提供者:{:?}", provides.clone());
+        provides
     }
     /// Request the content of the given file from the given peer.
     pub(crate) async fn request_file(
         &mut self,
         peer: PeerId,
         file_name: String,
-    ) -> Result<(Vec<u8>,String), Box<dyn Error + Send>> {
+    ) -> Result<(Vec<u8>, String), Box<dyn Error + Send>> {
         let (sender, receiver) = oneshot::channel();
         self.command_sender
             .send(Command::RequestFile {
@@ -145,20 +161,32 @@ impl Client {
 
     pub(crate) async fn set_file_cache(
         &mut self,
-        file_content:Vec<u8>,
-        file_name:String
-    )->Result<(), Box<dyn Error + Send>> {
+        file_content: Vec<u8>,
+        file_name: String,
+    ) -> Result<(), Box<dyn Error + Send>> {
         let (sender, receiver) = oneshot::channel();
-        self.event_sender.send(Event::SetFileCache { file_name, file_content,sender }).await.expect("将文件内容存入文件管理器缓存失败");
+        self.event_sender
+            .send(Event::SetFileCache {
+                file_name,
+                file_content,
+                sender,
+            })
+            .await
+            .expect("将文件内容存入文件管理器缓存失败");
         receiver.await.expect("Sender not be dropped.")
     }
 
-    pub(crate) async fn get_file_content_by_s3_cache(&mut self,file_name: String)->Result<Vec<u8>, Box<dyn Error + Send>> {
+    pub(crate) async fn get_file_content_by_s3_cache(
+        &mut self,
+        file_name: String,
+    ) -> Result<Vec<u8>, Box<dyn Error + Send>> {
         let (sender, receiver) = oneshot::channel();
-        self.event_sender.send(Event::GetFileFromS3 { file_name, sender}).await.expect("从S3中获取文件失败");
+        self.event_sender
+            .send(Event::GetFileFromS3 { file_name, sender })
+            .await
+            .expect("从S3中获取文件失败");
         receiver.await.expect("Sender not be dropped.")
     }
-
 }
 
 pub(crate) struct EventLoop {
@@ -168,8 +196,10 @@ pub(crate) struct EventLoop {
     pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), Box<dyn Error + Send>>>>,
     pending_start_providing: HashMap<kad::QueryId, oneshot::Sender<()>>,
     pending_get_providers: HashMap<kad::QueryId, oneshot::Sender<HashSet<PeerId>>>,
-    pending_request_file:
-        HashMap<OutboundRequestId, oneshot::Sender<Result<(Vec<u8>,String), Box<dyn Error + Send>>>>,
+    pending_request_file: HashMap<
+        OutboundRequestId,
+        oneshot::Sender<Result<(Vec<u8>, String), Box<dyn Error + Send>>>,
+    >,
 }
 
 impl EventLoop {
@@ -229,6 +259,8 @@ impl EventLoop {
                 },
             )) => {
                 if let Some(sender) = self.pending_get_providers.remove(&id) {
+                    // self.swarm.behaviour_mut().kademlia.kbuckets();
+                    debug!("swarm中收到如下提供者：{:?}", providers.clone());
                     sender.send(providers).expect("Receiver not to be dropped");
 
                     // Finish the query. We are only interested in the first result.
@@ -272,7 +304,7 @@ impl EventLoop {
                         .pending_request_file
                         .remove(&request_id)
                         .expect("Request to still be pending.")
-                        .send(Ok((response.0,response.1)));
+                        .send(Ok((response.0, response.1)));
                 }
             },
             SwarmEvent::Behaviour(BehaviourEvent::RequestResponse(
@@ -324,6 +356,7 @@ impl EventLoop {
     }
 
     async fn handle_command(&mut self, command: Command) {
+        info!("处理命令：{:?}", command);
         match command {
             Command::StartListening { addr, sender } => {
                 let _ = match self.swarm.listen_on(addr) {
@@ -425,7 +458,7 @@ pub(crate) enum Command {
     RequestFile {
         file_name: String,
         peer: PeerId,
-        sender: oneshot::Sender<Result<(Vec<u8>,String), Box<dyn Error + Send>>>,
+        sender: oneshot::Sender<Result<(Vec<u8>, String), Box<dyn Error + Send>>>,
     },
     RespondFile {
         file: Vec<u8>,
@@ -443,11 +476,11 @@ pub(crate) enum Event {
     SetFileCache {
         file_name: String,
         file_content: Vec<u8>,
-        sender: oneshot::Sender<Result<(),Box<dyn Error + Send>>>,
+        sender: oneshot::Sender<Result<(), Box<dyn Error + Send>>>,
     },
     GetFileFromS3 {
         file_name: String,
-        sender: oneshot::Sender<Result<Vec<u8>,Box<dyn Error + Send>>>,
+        sender: oneshot::Sender<Result<Vec<u8>, Box<dyn Error + Send>>>,
     },
 }
 // Simple file exchange protocol
