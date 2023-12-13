@@ -1,3 +1,4 @@
+use futures::channel::mpsc::Receiver;
 use futures::channel::{mpsc, oneshot};
 use futures::prelude::*;
 
@@ -17,7 +18,7 @@ use std::collections::{hash_map, HashMap, HashSet};
 use std::error::Error;
 use std::time::Duration;
 
-pub(crate) async fn new() -> Result<(Client, impl Stream<Item = Event>, EventLoop), Box<dyn Error>> {
+pub(crate) async fn new() -> Result<(Client, Receiver<Event>, EventLoop), Box<dyn Error>> {
     //创建一个秘钥对
     let id_keys = identity::Keypair::generate_ed25519();
     let peer_id = id_keys.public().to_peer_id();
@@ -55,7 +56,8 @@ pub(crate) async fn new() -> Result<(Client, impl Stream<Item = Event>, EventLoo
 
     Ok((
         Client {
-            sender: command_sender,
+            command_sender,
+            event_sender:event_sender.clone()
         },
         event_receiver,
         EventLoop::new(swarm, command_receiver, event_sender),
@@ -64,17 +66,22 @@ pub(crate) async fn new() -> Result<(Client, impl Stream<Item = Event>, EventLoo
 
 #[derive(Clone)]
 pub(crate) struct Client {
-    sender: mpsc::Sender<Command>,
+    command_sender: mpsc::Sender<Command>,
+    event_sender: mpsc::Sender<Event>,
 }
 
 impl Client {
+    pub fn get_sender_clone(&self) -> mpsc::Sender<Command> {
+        self.command_sender.clone()
+    }
+
     /// 监听指定地址端口
     pub(crate) async fn start_listening(
         &mut self,
         addr: Multiaddr,
     ) -> Result<(), Box<dyn Error + Send>> {
         let (sender, receiver) = oneshot::channel();
-        self.sender
+        self.command_sender
             .send(Command::StartListening { addr, sender })
             .await
             .expect("Command receiver not to be dropped.");
@@ -88,7 +95,7 @@ impl Client {
         peer_addr: Multiaddr,
     ) -> Result<(), Box<dyn Error + Send>> {
         let (sender, receiver) = oneshot::channel();
-        self.sender
+        self.command_sender
             .send(Command::Dial {
                 peer_id,
                 peer_addr,
@@ -102,7 +109,7 @@ impl Client {
     /// Advertise the local node as the provider of the given file on the DHT.
     pub(crate) async fn start_providing(&mut self, file_name: String) {
         let (sender, receiver) = oneshot::channel();
-        self.sender
+        self.command_sender
             .send(Command::StartProviding { file_name, sender })
             .await
             .expect("Command receiver not to be dropped.");
@@ -112,7 +119,7 @@ impl Client {
     /// Find the providers for the given file on the DHT.
     pub(crate) async fn get_providers(&mut self, file_name: String) -> HashSet<PeerId> {
         let (sender, receiver) = oneshot::channel();
-        self.sender
+        self.command_sender
             .send(Command::GetProviders { file_name, sender })
             .await
             .expect("Command receiver not to be dropped.");
@@ -123,9 +130,9 @@ impl Client {
         &mut self,
         peer: PeerId,
         file_name: String,
-    ) -> Result<Vec<u8>, Box<dyn Error + Send>> {
+    ) -> Result<(Vec<u8>,String), Box<dyn Error + Send>> {
         let (sender, receiver) = oneshot::channel();
-        self.sender
+        self.command_sender
             .send(Command::RequestFile {
                 file_name,
                 peer,
@@ -136,17 +143,22 @@ impl Client {
         receiver.await.expect("Sender not be dropped.")
     }
 
-    /// Respond with the provided file content to the given request.
-    pub(crate) async fn respond_file(
+    pub(crate) async fn set_file_cache(
         &mut self,
-        file: Vec<u8>,
-        channel: ResponseChannel<FileResponse>,
-    ) {
-        self.sender
-            .send(Command::RespondFile { file, channel })
-            .await
-            .expect("Command receiver not to be dropped.");
+        file_content:Vec<u8>,
+        file_name:String
+    )->Result<(), Box<dyn Error + Send>> {
+        let (sender, receiver) = oneshot::channel();
+        self.event_sender.send(Event::SetFileCache { file_name, file_content,sender }).await.expect("将文件内容存入文件管理器缓存失败");
+        receiver.await.expect("Sender not be dropped.")
     }
+
+    pub(crate) async fn get_file_content_by_s3_cache(&mut self,file_name: String)->Result<Vec<u8>, Box<dyn Error + Send>> {
+        let (sender, receiver) = oneshot::channel();
+        self.event_sender.send(Event::GetFileFromS3 { file_name, sender}).await.expect("从S3中获取文件失败");
+        receiver.await.expect("Sender not be dropped.")
+    }
+
 }
 
 pub(crate) struct EventLoop {
@@ -157,7 +169,7 @@ pub(crate) struct EventLoop {
     pending_start_providing: HashMap<kad::QueryId, oneshot::Sender<()>>,
     pending_get_providers: HashMap<kad::QueryId, oneshot::Sender<HashSet<PeerId>>>,
     pending_request_file:
-        HashMap<OutboundRequestId, oneshot::Sender<Result<Vec<u8>, Box<dyn Error + Send>>>>,
+        HashMap<OutboundRequestId, oneshot::Sender<Result<(Vec<u8>,String), Box<dyn Error + Send>>>>,
 }
 
 impl EventLoop {
@@ -260,7 +272,7 @@ impl EventLoop {
                         .pending_request_file
                         .remove(&request_id)
                         .expect("Request to still be pending.")
-                        .send(Ok(response.0));
+                        .send(Ok((response.0,response.1)));
                 }
             },
             SwarmEvent::Behaviour(BehaviourEvent::RequestResponse(
@@ -370,11 +382,15 @@ impl EventLoop {
                     .send_request(&peer, FileRequest(file_name));
                 self.pending_request_file.insert(request_id, sender);
             }
-            Command::RespondFile { file, channel } => {
+            Command::RespondFile {
+                file,
+                file_name,
+                channel,
+            } => {
                 self.swarm
                     .behaviour_mut()
                     .request_response
-                    .send_response(channel, FileResponse(file))
+                    .send_response(channel, FileResponse(file, file_name))
                     .expect("Connection to peer to be still open.");
             }
         }
@@ -388,7 +404,7 @@ struct Behaviour {
 }
 
 #[derive(Debug)]
-enum Command {
+pub(crate) enum Command {
     StartListening {
         addr: Multiaddr,
         sender: oneshot::Sender<Result<(), Box<dyn Error + Send>>>,
@@ -409,10 +425,11 @@ enum Command {
     RequestFile {
         file_name: String,
         peer: PeerId,
-        sender: oneshot::Sender<Result<Vec<u8>, Box<dyn Error + Send>>>,
+        sender: oneshot::Sender<Result<(Vec<u8>,String), Box<dyn Error + Send>>>,
     },
     RespondFile {
         file: Vec<u8>,
+        file_name: String,
         channel: ResponseChannel<FileResponse>,
     },
 }
@@ -423,23 +440,18 @@ pub(crate) enum Event {
         request: String,
         channel: ResponseChannel<FileResponse>,
     },
-}
-#[derive(Debug)]
-pub(crate) enum FileEvent {
-    GetFileFromS3{  
-        file_name:String
+    SetFileCache {
+        file_name: String,
+        file_content: Vec<u8>,
+        sender: oneshot::Sender<Result<(),Box<dyn Error + Send>>>,
     },
-    GetFileFromProvides{
-        file_name:String,
-        providers:HashSet<PeerId>
+    GetFileFromS3 {
+        file_name: String,
+        sender: oneshot::Sender<Result<Vec<u8>,Box<dyn Error + Send>>>,
     },
-    SetFileCache{
-        file_name:String,
-        file_content:Vec<u8>
-    }
 }
 // Simple file exchange protocol
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct FileRequest(String);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct FileResponse(Vec<u8>);
+pub(crate) struct FileResponse(Vec<u8>, String);
