@@ -12,16 +12,18 @@ use clap::Parser;
 use futures::{channel::mpsc, FutureExt, SinkExt, Stream, StreamExt};
 use libp2p::{build_multiaddr, futures::future::ok, multiaddr::Protocol, Multiaddr};
 use network::{Command, Event};
-use tracing::{span, Level, info};
+use tracing::{info, level_filters::LevelFilter, span, Level};
 use tracing_subscriber::EnvFilter;
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     //注册tracing_subscriber
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
         .try_init();
-    let span = span!(Level::TRACE, "my_span");
-    let _guard = span.enter();
 
     //存储在节点中的 待获取文件的信息
     let mut file_metadata_hashmap = BTreeMap::new();
@@ -29,18 +31,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     file_metadata_hashmap.insert("file2", ("file2"));
 
     //获取控制台参数
-    // let options = Options::parse();
-    let options = Options {
-        listen_address_with_port: None,
-        bootstrap_peer: Some(
-            "/ip4/192.168.3.21/tcp/53527/p2p/12D3KooW9szUy2HyAGDMPp17w1J3stoMwQ6djSz7fa9DpiGL4csX"
-                .parse::<Multiaddr>()
-                .unwrap(),
-        ),
-        node_type: NodeTypes::CommonNode,
-    };
+    let options = Options::parse();
+    // let options = Options {
+    //     listen_address_with_port: None,
+    //     bootstrap_peer: Some(
+    //         "/ip4/192.168.3.21/tcp/13000/p2p/12D3KooWPjceQrSwdWXPyLLeABRXmuqt69Rg3sBYbU1Nft9HyQ6X"
+    //             .parse::<Multiaddr>()
+    //             .unwrap(),
+    //     ),
+    //     node_type: NodeTypes::CommonNode,
+    // };
     //构建network节点
-    let (mut node_client, file_event_receiver, event_loop) = network::new(&options.node_type).await?;
+    let (mut node_client, file_event_receiver, event_loop) =
+        network::new(&options.node_type).await?;
 
     //运行第二层管道处理
     spawn(event_loop.run());
@@ -69,6 +72,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .await
                     .expect("Listening not to fail."),
             };
+            info!("引导节点创建成功");
             loop {
                 //作为引导节点存在，不处理实际业务
             }
@@ -101,6 +105,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 //move进来，避免生命周期低于spawn里的异步任务
                 let mut node_client = node_client_clone;
                 for (file_name, value) in file_metadata_hashmap {
+                    info!("文件{}对应任务：开始获取文件", file_name);
                     //从DHT网络中获取当前所需文件的提供者
                     let providers = node_client
                         .get_providers(file_name.to_owned().to_owned())
@@ -108,11 +113,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     //如果不存在提供者，就向filemanager发送通过s3下载的请求
                     let file_content: Vec<u8>;
                     if providers.is_empty() {
+                        info!("文件{}对应任务：当前网络无提供者，从S3中下载", file_name);
                         file_content = node_client
                             .get_file_content_by_s3_cache(file_name.to_string())
                             .await
                             .unwrap();
+                        info!(
+                            "文件{}对应任务：当前网络无提供者，从S3中下载完成",
+                            file_name
+                        );
                     } else {
+                        info!("文件{}对应任务：从网络中的提供者处下载文件", file_name);
                         //创建一些从Peer节点获取文件内容的future
                         let requests = providers.into_iter().map(|p| {
                             let mut node_client = node_client.clone();
@@ -125,6 +136,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             .map_err(|_| "None of the providers returned file.")
                             .unwrap()
                             .0;
+                        info!("文件{}对应任务：从网络中的提供者处下载文件完成", file_name);
                     }
                     //本地存储文件缓存
                     let _ = node_client
@@ -132,6 +144,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         .await;
                     //当前节点开始提供此文件
                     node_client.start_providing(file_name.to_string()).await;
+                    info!("文件{}对应任务：当前节点开始提供该文件", file_name);
                 }
             });
             loop {}
@@ -197,6 +210,7 @@ impl FileManage {
         loop {
             match self.file_event_receiver.next().await {
                 Some(network::Event::InboundRequest { request, channel }) => {
+                    info!("当前节点处理入站请求：获取文件{}",&request);
                     let _ = self.command_sender.send(Command::RespondFile {
                         file: self.get_file_content_by_self_cache(&request).unwrap(),
                         file_name: request,

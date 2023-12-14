@@ -9,10 +9,10 @@ use libp2p::{
     noise,
     request_response::{self, OutboundRequestId, ProtocolSupport, ResponseChannel},
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
-    tcp, yamux, PeerId
+    tcp, yamux, PeerId,
 };
 
-use libp2p::StreamProtocol;
+use libp2p::{identify, ping, StreamProtocol};
 use serde::{Deserialize, Serialize};
 use std::collections::{hash_map, HashMap, HashSet};
 use std::error::Error;
@@ -51,11 +51,16 @@ pub(crate) async fn new(
             },
             request_response: request_response::cbor::Behaviour::new(
                 [(
-                    StreamProtocol::new("/file-exchange/1"),
+                    StreamProtocol::new("/file-exchange/1.0.0"),
                     ProtocolSupport::Full,
                 )],
                 request_response::Config::default(),
             ),
+            identify: identify::Behaviour::new(identify::Config::new(
+                "/identify/1.0.0".to_string(),
+                key.public(),
+            )),
+            ping: ping::Behaviour::default(),
         })?
         .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60 * 10)))
         .build();
@@ -64,6 +69,7 @@ pub(crate) async fn new(
         .behaviour_mut()
         .kademlia
         .set_mode(Some(kad::Mode::Server));
+    let _ = swarm.behaviour_mut().kademlia.bootstrap();
 
     let (command_sender, command_receiver) = mpsc::channel(0);
     let (event_sender, event_receiver) = mpsc::channel(0);
@@ -119,7 +125,6 @@ impl Client {
             .expect("Command receiver not to be dropped.");
         receiver.await.expect("Sender not to be dropped.")
     }
-
     /// Advertise the local node as the provider of the given file on the DHT.
     pub(crate) async fn start_providing(&mut self, file_name: String) {
         let (sender, receiver) = oneshot::channel();
@@ -138,7 +143,7 @@ impl Client {
             .await
             .expect("Command receiver not to be dropped.");
         let provides = receiver.await.expect("Sender not to be dropped.");
-        debug!("该文件有如下提供者:{:?}", provides.clone());
+        info!("该文件有如下提供者:{:?}", provides.clone());
         provides
     }
     /// Request the content of the given file from the given peer.
@@ -234,6 +239,29 @@ impl EventLoop {
 
     async fn handle_event(&mut self, event: SwarmEvent<BehaviourEvent>) {
         match event {
+            //https://docs.rs/libp2p/latest/libp2p/kad/index.html#important-discrepancies 必须通过Identify才能节点发现
+            SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received {
+                peer_id,
+                info: identify::Info { listen_addrs, .. },
+            })) => {
+                for addr in listen_addrs {
+                    self.swarm
+                        .behaviour_mut()
+                        .kademlia
+                        .add_address(&peer_id, addr.clone());
+                    info!("Identify后将{}节点-地址{} 添加到DHT", &peer_id, addr);
+                }
+            }
+            SwarmEvent::Behaviour(BehaviourEvent::Ping(ping::Event {
+                peer,
+                result: Err(_),
+                ..
+            })) => {
+                //ping失败去除节点
+                info!("将{}节点从DHT中去除", &peer);
+                self.swarm.behaviour_mut().kademlia.remove_peer(&peer);
+            }
+            SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Sent { peer_id })) => {}
             SwarmEvent::Behaviour(BehaviourEvent::Kademlia(
                 kad::Event::OutboundQueryProgressed {
                     id,
@@ -260,7 +288,7 @@ impl EventLoop {
             )) => {
                 if let Some(sender) = self.pending_get_providers.remove(&id) {
                     // self.swarm.behaviour_mut().kademlia.kbuckets();
-                    debug!("swarm中收到如下提供者：{:?}", providers.clone());
+                    info!("swarm中收到如下提供者：{:?}", providers.clone());
                     sender.send(providers).expect("Receiver not to be dropped");
 
                     // Finish the query. We are only interested in the first result.
@@ -288,6 +316,7 @@ impl EventLoop {
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
+                    info!("收到入站文件请求");
                     self.event_sender
                         .send(Event::InboundRequest {
                             request: request.0,
@@ -340,7 +369,10 @@ impl EventLoop {
             }
             SwarmEvent::ConnectionClosed { .. } => {}
             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                //链接不到节点就将其从DHT中去除
                 if let Some(peer_id) = peer_id {
+                    info!("将{}节点从DHT中去除", &peer_id);
+                    self.swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
                     if let Some(sender) = self.pending_dial.remove(&peer_id) {
                         let _ = sender.send(Err(Box::new(error)));
                     }
@@ -351,12 +383,12 @@ impl EventLoop {
                 peer_id: Some(peer_id),
                 ..
             } => eprintln!("Dialing {peer_id}"),
-            e => panic!("{e:?}"),
+            e => {}
         }
     }
 
     async fn handle_command(&mut self, command: Command) {
-        info!("处理命令：{:?}", command);
+        // info!("处理命令：{:?}", command);
         match command {
             Command::StartListening { addr, sender } => {
                 let _ = match self.swarm.listen_on(addr) {
@@ -408,6 +440,7 @@ impl EventLoop {
                 peer,
                 sender,
             } => {
+                info!("处理文件请求命令:{}", file_name);
                 let request_id = self
                     .swarm
                     .behaviour_mut()
@@ -434,6 +467,8 @@ impl EventLoop {
 struct Behaviour {
     request_response: request_response::cbor::Behaviour<FileRequest, FileResponse>,
     kademlia: kad::Behaviour<kad::store::MemoryStore>,
+    identify: identify::Behaviour,
+    ping: ping::Behaviour,
 }
 
 #[derive(Debug)]
