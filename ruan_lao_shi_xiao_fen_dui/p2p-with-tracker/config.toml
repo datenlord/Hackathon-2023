@@ -11,7 +11,7 @@ sessionExpireTime = 10 # seconds
 sessionCheckTime = 3 # seconds
 
 [s3]
-endpoint = "http://81.69.26.72:39000"
+endpoint = "http://127.0.0.1:39000"
 bucket = "hackathon"
 region = ""
 accessKey = "hackathon"
