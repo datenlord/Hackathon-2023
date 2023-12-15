@@ -1,0 +1,18 @@
+version: "3"
+
+services:
+  minio:
+    image: minio/minio
+    container_name: hackathon-minio
+    ports:
+      - "39000:9000"
+      - "39090:9090"
+    volumes:
+      - ./data:/data
+      - ./config:/root/.minio
+    environment:
+      - MINIO_ROOT_USER=hackathon
+      - MINIO_ROOT_PASSWORD=hackathon
+      - MINIO_BUCKET=hackathon
+      - MINIO_SERVER_URL=http://127.0.0.1:9000
+    command: minio server /data --console-address ':9090'
