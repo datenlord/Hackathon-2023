@@ -291,7 +291,7 @@ impl EventLoop {
                         .behaviour_mut()
                         .kademlia
                         .add_address(&peer_id, addr.clone());
-                    info!("Identify后将{}节点-地址{} 添加到DHT", &peer_id, addr);
+                    debug!("Identify后将{}节点-地址{} 添加到DHT", &peer_id, addr);
                 }
             }
             SwarmEvent::Behaviour(BehaviourEvent::Ping(ping::Event {
@@ -449,11 +449,11 @@ impl EventLoop {
             SwarmEvent::Dialing {
                 peer_id: Some(peer_id),
                 ..
-            } => eprintln!("Dialing {peer_id}"),
+            } => debug!("Dialing {peer_id}"),
             SwarmEvent::Behaviour(BehaviourEvent::Ping { .. }) => {
                 //ping事件是这种形式：Behaviour(BehaviourEvent: Event { peer: PeerId("12D3KooWPjceQrSwdWXPyLLeABRXmuqt69Rg3sBYbU1Nft9HyQ6X"), connection: ConnectionId(1), result: Ok(23.470875ms) })
             }
-            e => {
+            _e => {
                 // println!(
                 //     "未处理Swarm事件{:?},当前K桶:{:?}",
                 //     e,
