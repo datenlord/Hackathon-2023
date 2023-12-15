@@ -1,0 +1,235 @@
+asklv@192 baseline % cargo run
+   Compiling baseline v0.1.0 (/Users/asklv/Projects/Hackathon/baseline)
+    Finished dev [unoptimized + debuginfo] target(s) in 1.43s
+     Running `target/debug/baseline`
+Start multi download test... start_time: Instant { tv_sec: 1048133, tv_nsec: 211625750 }
+Start download test 0
+Start download test 1
+Start download test 3
+Start download test 5
+Start download test 4
+Start download test 6
+Start download test 7
+Start download test 8
+Start download test 9
+Start download test 2
+End download test 0
+End download test 8
+End download test 9
+End download test 5
+End download test 7
+End download test 3
+End download test 4
+End download test 6
+End download test 2
+End download test 1
+End multi download test... end_time: Instant { tv_sec: 1048246, tv_nsec: 701054250 }
+Task-0 multi download test duration: 113.4894285s
+Start multi download test... start_time: Instant { tv_sec: 1048246, tv_nsec: 701085208 }
+Start download test 0
+Start download test 1
+Start download test 2
+Start download test 3
+Start download test 4
+Start download test 5
+Start download test 6
+Start download test 7
+Start download test 8
+Start download test 9
+End download test 8
+End download test 5
+End download test 1
+End download test 6
+End download test 7
+End download test 0
+End download test 9
+End download test 4
+End download test 3
+End download test 2
+End multi download test... end_time: Instant { tv_sec: 1048357, tv_nsec: 382688125 }
+Task-1 multi download test duration: 110.681602917s
+Start multi download test... start_time: Instant { tv_sec: 1048357, tv_nsec: 382721875 }
+Start download test 0
+Start download test 1
+Start download test 3
+Start download test 4
+Start download test 5
+Start download test 6
+Start download test 7
+Start download test 8
+Start download test 9
+Start download test 2
+End download test 3
+End download test 6
+End download test 7
+End download test 8
+End download test 5
+End download test 4
+End download test 2
+End download test 9
+End download test 1
+End download test 0
+End multi download test... end_time: Instant { tv_sec: 1048497, tv_nsec: 724967208 }
+Task-2 multi download test duration: 140.342245333s
+Start multi download test... start_time: Instant { tv_sec: 1048497, tv_nsec: 724983458 }
+Start download test 0
+Start download test 1
+Start download test 3
+Start download test 4
+Start download test 5
+Start download test 6
+Start download test 7
+Start download test 8
+Start download test 9
+Start download test 2
+End download test 5
+End download test 1
+End download test 8
+End download test 0
+End download test 6
+End download test 9
+End download test 7
+End download test 2
+End download test 3
+End download test 4
+End multi download test... end_time: Instant { tv_sec: 1048621, tv_nsec: 978657083 }
+Task-3 multi download test duration: 124.253673625s
+Start multi download test... start_time: Instant { tv_sec: 1048621, tv_nsec: 978682625 }
+Start download test 0
+Start download test 2
+Start download test 4
+Start download test 5
+Start download test 3
+Start download test 1
+Start download test 6
+Start download test 7
+Start download test 8
+Start download test 9
+End download test 5
+End download test 8
+End download test 2
+End download test 4
+End download test 9
+End download test 7
+End download test 6
+End download test 3
+End download test 1
+End download test 0
+End multi download test... end_time: Instant { tv_sec: 1048738, tv_nsec: 916607166 }
+Task-4 multi download test duration: 116.937924541s
+Start multi download test... start_time: Instant { tv_sec: 1048738, tv_nsec: 916632416 }
+Start download test 0
+Start download test 1
+Start download test 3
+Start download test 4
+Start download test 5
+Start download test 2
+Start download test 6
+Start download test 7
+Start download test 8
+Start download test 9
+End download test 3
+End download test 9
+End download test 2
+End download test 4
+End download test 0
+End download test 1
+End download test 7
+End download test 8
+End download test 6
+End download test 5
+End multi download test... end_time: Instant { tv_sec: 1048859, tv_nsec: 151565083 }
+Task-5 multi download test duration: 120.234932667s
+Start multi download test... start_time: Instant { tv_sec: 1048859, tv_nsec: 151584583 }
+Start download test 0
+Start download test 1
+Start download test 2
+Start download test 4
+Start download test 5
+Start download test 6
+Start download test 7
+Start download test 3
+Start download test 8
+Start download test 9
+End download test 9
+End download test 0
+End download test 3
+End download test 5
+End download test 6
+End download test 1
+End download test 8
+End download test 2
+End download test 7
+End download test 4
+End multi download test... end_time: Instant { tv_sec: 1048968, tv_nsec: 65341333 }
+Task-6 multi download test duration: 108.91375675s
+Start multi download test... start_time: Instant { tv_sec: 1048968, tv_nsec: 65367166 }
+Start download test 0
+Start download test 2
+Start download test 5
+Start download test 6
+Start download test 7
+Start download test 1
+Start download test 8
+Start download test 9
+Start download test 3
+Start download test 4
+End download test 3
+End download test 5
+End download test 8
+End download test 6
+End download test 9
+End download test 0
+End download test 4
+End download test 2
+End download test 1
+End download test 7
+End multi download test... end_time: Instant { tv_sec: 1049081, tv_nsec: 595953500 }
+Task-7 multi download test duration: 113.530586334s
+Start multi download test... start_time: Instant { tv_sec: 1049081, tv_nsec: 595999666 }
+Start download test 0
+Start download test 1
+Start download test 2
+Start download test 3
+Start download test 4
+Start download test 5
+Start download test 6
+Start download test 7
+Start download test 8
+Start download test 9
+End download test 1
+End download test 9
+End download test 5
+End download test 6
+End download test 7
+End download test 2
+End download test 0
+End download test 8
+End download test 4
+End download test 3
+End multi download test... end_time: Instant { tv_sec: 1049195, tv_nsec: 332050375 }
+Task-8 multi download test duration: 113.736050709s
+Start multi download test... start_time: Instant { tv_sec: 1049195, tv_nsec: 332062375 }
+Start download test 0
+Start download test 2
+Start download test 5
+Start download test 4
+Start download test 6
+Start download test 1
+Start download test 7
+Start download test 8
+Start download test 9
+Start download test 3
+End download test 1
+End download test 2
+End download test 3
+End download test 5
+End download test 0
+End download test 7
+End download test 6
+End download test 8
+End download test 9
+End download test 4
+End multi download test... end_time: Instant { tv_sec: 1049311, tv_nsec: 147842875 }
+Task-9 multi download test duration: 115.8157805s
+Average multi download test duration: 117793
