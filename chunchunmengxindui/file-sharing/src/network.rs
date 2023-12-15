@@ -356,8 +356,7 @@ impl EventLoop {
                                     .send(Event::InboundRequest {
                                         request: file_name,
                                         channel,
-                                    })
-                                    .await
+                                    }).await
                                     .expect("Event receiver not to be dropped.");
                             }
                             MessageRequestBody::MultiaddrsMessageRequestBody { provides } => {
@@ -546,9 +545,8 @@ impl EventLoop {
                     .kademlia
                     .add_address(&peer, multiaddr);
                 info!(
-                    "处理文件请求命令:{},\n当前k桶已知{:?}",
-                    file_name,
-                    self.swarm.behaviour_mut().known_peers()
+                    "处理文件请求命令:{}",
+                    file_name
                 );
                 let request_id = self.swarm.behaviour_mut().request_response.send_request(
                     &peer,
@@ -561,11 +559,12 @@ impl EventLoop {
                 file_name,
                 channel,
             } => {
-                info!(
-                    "处理RespondFile命令,文件：{},当前k桶已知{:?}",
-                    file_name,
-                    self.swarm.behaviour_mut().known_peers()
-                );
+                // info!("filecontent:{:?}",file);
+                // info!(
+                //     "处理RespondFile命令,文件：{},当前k桶已知{:?}",
+                //     file_name,
+                //     self.swarm.behaviour_mut().known_peers()
+                // );
                 self.swarm
                     .behaviour_mut()
                     .request_response

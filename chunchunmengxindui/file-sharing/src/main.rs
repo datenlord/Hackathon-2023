@@ -220,17 +220,19 @@ impl FileManage {
                         file: self.get_file_content_by_self_cache(&request).unwrap(),
                         file_name: request,
                         channel,
-                    });
+                    }).await.expect("Event receiver not to be dropped.");
                 }
                 Some(network::Event::SetFileCache {
                     file_name,
                     file_content,
                     sender,
                 }) => {
+                    info!("处理SetFileCache");
                     self.set_file_cache(&file_name, file_content);
                     sender.send(Ok(()));
                 }
                 Some(network::Event::GetFileFromS3 { file_name, sender }) => {
+                    info!("处理GetFileFromS3e");
                     sender.send(Ok(self
                         .get_file_content_by_s3_cache(&file_name)
                         .await
@@ -261,7 +263,9 @@ impl FileManage {
         &self,
         file_name: &str,
     ) -> Result<Vec<u8>, Box<dyn Error>> {
-        let mut f = File::open("/Users/wangshuai/Documents/rustWork/Hackathon-2023/chunchunmengxindui/file-sharing/target/fileStorage/ans.txt")?;
+        let current_dir = std::env::current_dir().expect("Failed to get current directory");
+        let file_path = current_dir.join("fileStorage/ans.txt");
+        let mut f = File::open(file_path)?;
         let mut buffer = Vec::new();
         // read the whole file
         f.read_to_end(&mut buffer)?;
