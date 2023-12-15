@@ -12,20 +12,21 @@ use libp2p::{
     tcp, yamux, PeerId,
 };
 
-use libp2p::{identify, ping, StreamProtocol};
+use libp2p::{build_multiaddr, identify, ping, StreamProtocol};
 use serde::{Deserialize, Serialize};
+use std::clone;
 use std::collections::{hash_map, HashMap, HashSet};
 use std::error::Error;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::NodeTypes;
+use crate::{NodeTypes, Options};
 
 pub(crate) async fn new(
-    nodeTypes: &NodeTypes,
+    options: Options,
 ) -> Result<(Client, Receiver<Event>, EventLoop), Box<dyn Error>> {
     //创建一个秘钥对
-    let id_keys = match nodeTypes {
+    let id_keys = match options.node_type {
         NodeTypes::Bootstrap => {
             //通过这种方式让引导节点产生一个固定的peerID
             let mut bytes = [0u8; 32];
@@ -80,7 +81,7 @@ pub(crate) async fn new(
             event_sender: event_sender.clone(),
         },
         event_receiver,
-        EventLoop::new(swarm, command_receiver, event_sender),
+        EventLoop::new(swarm, command_receiver, event_sender, options),
     ))
 }
 
@@ -136,20 +137,54 @@ impl Client {
     }
 
     /// Find the providers for the given file on the DHT.
-    pub(crate) async fn get_providers(&mut self, file_name: String) -> HashSet<PeerId> {
+    pub(crate) async fn get_providers(
+        &mut self,
+        file_name: String,
+    ) -> HashSet<(PeerId, Multiaddr)> {
         let (sender, receiver) = oneshot::channel();
         self.command_sender
             .send(Command::GetProviders { file_name, sender })
             .await
             .expect("Command receiver not to be dropped.");
         let provides = receiver.await.expect("Sender not to be dropped.");
+
+        let (sender, receiver) = oneshot::channel();
+        self.command_sender
+            .send(Command::GetAddrByProvides {
+                provides: provides.clone(),
+                sender,
+            })
+            .await
+            .expect("Command receiver not to be dropped.");
+        let result: Result<Vec<String>, Box<dyn Error + Send>> =
+            receiver.await.expect("Sender not to be dropped.");
+        // 记录到已知节点
+        info!("当前获取的引导节点DHT记录：{:?}", result);
+        let mut hash_set = HashSet::new();
+        result.unwrap().iter().for_each(|addr| {
+            let ma: Multiaddr = addr.parse().unwrap();
+            if let Some(Protocol::P2p(peer_id)) = ma.iter().last() {
+                if provides.contains(&peer_id) {
+                    hash_set.insert((peer_id, ma));
+                }
+            }
+        });
         info!("该文件有如下提供者:{:?}", provides.clone());
-        provides
+        hash_set
+    }
+    pub(crate) async fn get_closest_peers(&mut self, peer: PeerId) {
+        let (sender, receiver) = oneshot::channel();
+        self.command_sender
+            .send(Command::GetClosetPeers { peer, sender })
+            .await
+            .expect("Command receiver not to be dropped.");
+        receiver.await.expect("Sender not be dropped.");
     }
     /// Request the content of the given file from the given peer.
     pub(crate) async fn request_file(
         &mut self,
         peer: PeerId,
+        multiaddr: Multiaddr,
         file_name: String,
     ) -> Result<(Vec<u8>, String), Box<dyn Error + Send>> {
         let (sender, receiver) = oneshot::channel();
@@ -157,6 +192,7 @@ impl Client {
             .send(Command::RequestFile {
                 file_name,
                 peer,
+                multiaddr,
                 sender,
             })
             .await
@@ -205,6 +241,9 @@ pub(crate) struct EventLoop {
         OutboundRequestId,
         oneshot::Sender<Result<(Vec<u8>, String), Box<dyn Error + Send>>>,
     >,
+    pending_request_query_provides:
+        HashMap<OutboundRequestId, oneshot::Sender<Result<Vec<String>, Box<dyn Error + Send>>>>,
+    options: Options,
 }
 
 impl EventLoop {
@@ -212,6 +251,7 @@ impl EventLoop {
         swarm: Swarm<Behaviour>,
         command_receiver: mpsc::Receiver<Command>,
         event_sender: mpsc::Sender<Event>,
+        options: Options,
     ) -> Self {
         Self {
             swarm,
@@ -221,6 +261,8 @@ impl EventLoop {
             pending_start_providing: Default::default(),
             pending_get_providers: Default::default(),
             pending_request_file: Default::default(),
+            pending_request_query_provides: Default::default(),
+            options,
         }
     }
 
@@ -300,56 +342,85 @@ impl EventLoop {
                         .finish();
                 }
             }
-            SwarmEvent::Behaviour(BehaviourEvent::Kademlia(
-                kad::Event::OutboundQueryProgressed {
-                    result:
-                        kad::QueryResult::GetProviders(Ok(
-                            kad::GetProvidersOk::FinishedWithNoAdditionalRecord { .. },
-                        )),
-                    ..
-                },
-            )) => {}
-            SwarmEvent::Behaviour(BehaviourEvent::Kademlia(_)) => {}
             SwarmEvent::Behaviour(BehaviourEvent::RequestResponse(
                 request_response::Event::Message { message, .. },
             )) => match message {
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
-                    info!("收到入站文件请求");
-                    self.event_sender
-                        .send(Event::InboundRequest {
-                            request: request.0,
-                            channel,
-                        })
-                        .await
-                        .expect("Event receiver not to be dropped.");
+                    if let MyRequest(message_body) = request {
+                        match message_body {
+                            MessageRequestBody::FileContentMessageRequestBody { file_name } => {
+                                info!("收到入站文件请求 file_name:{:?}", file_name);
+                                self.event_sender
+                                    .send(Event::InboundRequest {
+                                        request: file_name,
+                                        channel,
+                                    })
+                                    .await
+                                    .expect("Event receiver not to be dropped.");
+                            }
+                            MessageRequestBody::MultiaddrsMessageRequestBody { provides } => {
+                                info!("收到入站DHT记录请求 provides:{:?}", provides);
+                                //获取引导节点存储的有关提供者的MultiAddr
+                                let know_peers = self.swarm.behaviour_mut().known_peers();
+                                //TODO 暂时获取全量记录，不通过provides过滤
+                                let multiaddrs: Vec<String> = know_peers
+                                    .into_values()
+                                    .flatten()
+                                    .map(|addr| addr.to_string())
+                                    .collect();
+                                self.swarm
+                                    .behaviour_mut()
+                                    .request_response
+                                    .send_response(
+                                        channel,
+                                        MyResponse(MessageRespBody::MultiaddrsMessageRespBody {
+                                            multiaddrs,
+                                        }),
+                                    )
+                                    .expect("Connection to peer to be still open.");
+                            }
+                        }
+                    }
                 }
                 request_response::Message::Response {
                     request_id,
                     response,
-                } => {
-                    let _ = self
-                        .pending_request_file
-                        .remove(&request_id)
-                        .expect("Request to still be pending.")
-                        .send(Ok((response.0, response.1)));
-                }
+                } => match response {
+                    MyResponse(MessageRespBody::FileContentMessageRespBody {
+                        file_name,
+                        file_content,
+                    }) => {
+                        info!("收到文件内容响应");
+                        let _ = self
+                            .pending_request_file
+                            .remove(&request_id)
+                            .expect("Request to still be pending.")
+                            .send(Ok((file_content, file_name)));
+                    }
+                    MyResponse(MessageRespBody::MultiaddrsMessageRespBody { multiaddrs }) => {
+                        info!("收到DHT记录响应");
+                        let _ = self
+                            .pending_request_query_provides
+                            .remove(&request_id)
+                            .expect("Request to still be pending.")
+                            .send(Ok(multiaddrs));
+                    }
+                },
             },
             SwarmEvent::Behaviour(BehaviourEvent::RequestResponse(
                 request_response::Event::OutboundFailure {
                     request_id, error, ..
                 },
             )) => {
+                info!("OutboundFailure:{:?}", error);
                 let _ = self
                     .pending_request_file
                     .remove(&request_id)
                     .expect("Request to still be pending.")
                     .send(Err(Box::new(error)));
             }
-            SwarmEvent::Behaviour(BehaviourEvent::RequestResponse(
-                request_response::Event::ResponseSent { .. },
-            )) => {}
             SwarmEvent::NewListenAddr { address, .. } => {
                 let local_peer_id = *self.swarm.local_peer_id();
                 eprintln!(
@@ -357,7 +428,6 @@ impl EventLoop {
                     address.with(Protocol::P2p(local_peer_id))
                 );
             }
-            SwarmEvent::IncomingConnection { .. } => {}
             SwarmEvent::ConnectionEstablished {
                 peer_id, endpoint, ..
             } => {
@@ -367,7 +437,6 @@ impl EventLoop {
                     }
                 }
             }
-            SwarmEvent::ConnectionClosed { .. } => {}
             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                 //链接不到节点就将其从DHT中去除
                 if let Some(peer_id) = peer_id {
@@ -378,12 +447,20 @@ impl EventLoop {
                     }
                 }
             }
-            SwarmEvent::IncomingConnectionError { .. } => {}
             SwarmEvent::Dialing {
                 peer_id: Some(peer_id),
                 ..
             } => eprintln!("Dialing {peer_id}"),
-            e => {}
+            SwarmEvent::Behaviour(BehaviourEvent::Ping { .. }) => {
+                //ping事件是这种形式：Behaviour(BehaviourEvent: Event { peer: PeerId("12D3KooWPjceQrSwdWXPyLLeABRXmuqt69Rg3sBYbU1Nft9HyQ6X"), connection: ConnectionId(1), result: Ok(23.470875ms) })
+            }
+            e => {
+                // println!(
+                //     "未处理Swarm事件{:?},当前K桶:{:?}",
+                //     e,
+                //     self.swarm.behaviour_mut().known_peers()
+                // );
+            }
         }
     }
 
@@ -435,17 +512,48 @@ impl EventLoop {
                     .get_providers(file_name.into_bytes().into());
                 self.pending_get_providers.insert(query_id, sender);
             }
+            Command::GetClosetPeers { peer, sender } => {
+                async {
+                    info!("执行对peerID为{}的get_closest_peers", peer);
+                    self.swarm.behaviour_mut().kademlia.get_closest_peers(peer);
+                }
+                .await;
+                sender.send(Ok(()));
+            }
+            Command::GetAddrByProvides { provides, sender } => {
+                //向引导节点发请求，查询provide对应的MultiAddr
+                if let Some(Protocol::P2p(peer_id)) =
+                    self.options.bootstrap_peer.clone().unwrap().iter().last()
+                {
+                    let request_id = self.swarm.behaviour_mut().request_response.send_request(
+                        &peer_id,
+                        MyRequest(MessageRequestBody::MultiaddrsMessageRequestBody {
+                            provides: provides.into_iter().map(|p| p.to_base58()).collect(),
+                        }),
+                    );
+                    self.pending_request_query_provides
+                        .insert(request_id, sender);
+                }
+            }
             Command::RequestFile {
                 file_name,
                 peer,
+                multiaddr,
                 sender,
             } => {
-                info!("处理文件请求命令:{}", file_name);
-                let request_id = self
-                    .swarm
+                self.swarm
                     .behaviour_mut()
-                    .request_response
-                    .send_request(&peer, FileRequest(file_name));
+                    .kademlia
+                    .add_address(&peer, multiaddr);
+                info!(
+                    "处理文件请求命令:{},\n当前k桶已知{:?}",
+                    file_name,
+                    self.swarm.behaviour_mut().known_peers()
+                );
+                let request_id = self.swarm.behaviour_mut().request_response.send_request(
+                    &peer,
+                    MyRequest(MessageRequestBody::FileContentMessageRequestBody { file_name }),
+                );
                 self.pending_request_file.insert(request_id, sender);
             }
             Command::RespondFile {
@@ -453,10 +561,21 @@ impl EventLoop {
                 file_name,
                 channel,
             } => {
+                info!(
+                    "处理RespondFile命令,文件：{},当前k桶已知{:?}",
+                    file_name,
+                    self.swarm.behaviour_mut().known_peers()
+                );
                 self.swarm
                     .behaviour_mut()
                     .request_response
-                    .send_response(channel, FileResponse(file, file_name))
+                    .send_response(
+                        channel,
+                        MyResponse(MessageRespBody::FileContentMessageRespBody {
+                            file_name,
+                            file_content: file,
+                        }),
+                    )
                     .expect("Connection to peer to be still open.");
             }
         }
@@ -465,10 +584,22 @@ impl EventLoop {
 
 #[derive(NetworkBehaviour)]
 struct Behaviour {
-    request_response: request_response::cbor::Behaviour<FileRequest, FileResponse>,
+    request_response: request_response::cbor::Behaviour<MyRequest, MyResponse>,
     kademlia: kad::Behaviour<kad::store::MemoryStore>,
     identify: identify::Behaviour,
     ping: ping::Behaviour,
+}
+impl Behaviour {
+    pub fn known_peers(&mut self) -> HashMap<PeerId, Vec<Multiaddr>> {
+        let mut peers = HashMap::new();
+        for b in self.kademlia.kbuckets() {
+            for e in b.iter() {
+                peers.insert(*e.node.key.preimage(), e.node.value.clone().into_vec());
+            }
+        }
+
+        peers
+    }
 }
 
 #[derive(Debug)]
@@ -493,12 +624,21 @@ pub(crate) enum Command {
     RequestFile {
         file_name: String,
         peer: PeerId,
+        multiaddr: Multiaddr,
         sender: oneshot::Sender<Result<(Vec<u8>, String), Box<dyn Error + Send>>>,
     },
     RespondFile {
         file: Vec<u8>,
         file_name: String,
-        channel: ResponseChannel<FileResponse>,
+        channel: ResponseChannel<MyResponse>,
+    },
+    GetClosetPeers {
+        peer: PeerId,
+        sender: oneshot::Sender<Result<(), Box<dyn Error + Send>>>,
+    },
+    GetAddrByProvides {
+        provides: HashSet<PeerId>,
+        sender: oneshot::Sender<Result<Vec<String>, Box<dyn Error + Send>>>,
     },
 }
 
@@ -506,7 +646,7 @@ pub(crate) enum Command {
 pub(crate) enum Event {
     InboundRequest {
         request: String,
-        channel: ResponseChannel<FileResponse>,
+        channel: ResponseChannel<MyResponse>,
     },
     SetFileCache {
         file_name: String,
@@ -518,8 +658,48 @@ pub(crate) enum Event {
         sender: oneshot::Sender<Result<Vec<u8>, Box<dyn Error + Send>>>,
     },
 }
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) enum MessageRequestBody {
+    FileContentMessageRequestBody { file_name: String },
+    MultiaddrsMessageRequestBody { provides: Vec<String> },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) enum MessageRespBody {
+    FileContentMessageRespBody {
+        file_content: Vec<u8>,
+        file_name: String,
+    },
+    MultiaddrsMessageRespBody {
+        multiaddrs: Vec<String>,
+    },
+}
+//req-res的传输需要有EOF
+pub(crate) struct TransportBody(Vec<u8>);
 // Simple file exchange protocol
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct FileRequest(String);
+struct MyRequest(MessageRequestBody);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct FileResponse(Vec<u8>, String);
+pub(crate) struct MyResponse(MessageRespBody);
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::{MessageRespBody, MyResponse};
+
+    #[test]
+    fn serialize_myresponse() {
+        let current_dir = std::env::current_dir().expect("Failed to get current directory");
+        let file_path = current_dir.join("fileStorage/ans.txt");
+        println!("{:?}", file_path);
+        if let Ok(content) = fs::read_to_string(file_path) {
+            // println!("{}", &content);
+            let a = MyResponse(MessageRespBody::FileContentMessageRespBody {
+                file_name: "文件名称".to_string(),
+                file_content: content.into_bytes(),
+            });
+            println!("{}", serde_json::to_string(&a).unwrap());
+        }
+    }
+}

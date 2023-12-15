@@ -14,7 +14,7 @@ use libp2p::{build_multiaddr, futures::future::ok, multiaddr::Protocol, Multiadd
 use network::{Command, Event};
 use tracing::{info, level_filters::LevelFilter, span, Level};
 use tracing_subscriber::EnvFilter;
-#[async_std::main]
+#[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     //注册tracing_subscriber
     let _ = tracing_subscriber::fmt()
@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // };
     //构建network节点
     let (mut node_client, file_event_receiver, event_loop) =
-        network::new(&options.node_type).await?;
+        network::new(options.clone()).await?;
 
     //运行第二层管道处理
     spawn(event_loop.run());
@@ -124,10 +124,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         );
                     } else {
                         info!("文件{}对应任务：从网络中的提供者处下载文件", file_name);
+
                         //创建一些从Peer节点获取文件内容的future
                         let requests = providers.into_iter().map(|p| {
                             let mut node_client = node_client.clone();
-                            async move { node_client.request_file(p, file_name.to_owned()).await }
+                           
+                            async move { 
+                                // node_client.get_closest_peers(p).await;
+                                node_client.request_file(p.0,p.1,file_name.to_owned()).await
+                             }
                                 .boxed()
                         });
                         //选择其中一个进行执行
@@ -179,7 +184,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 //         print!("commonNode") ;
 //        }
 //    }
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug,Clone)]
 #[clap(name = "file_sharing options")]
 struct Options {
     //当前节点初始化时需要监听的地址端口
@@ -244,7 +249,7 @@ impl FileManage {
     fn get_file_content_by_self_cache(&self, file_name: &str) -> Result<Vec<u8>, Box<dyn Error>> {
         let content = self.file_cache.get(file_name);
         match content {
-            Some(file_vec) => Ok(file_vec.to_owned()),
+            Some(file_vec) => Ok(file_vec.to_owned().clone()),
             None => {
                 //正常来说调用此方法是因为本身节点宣布提供该文件，此处却无法提供，所以panic
                 panic!("异常：当前节点无法提供{}文件", file_name);
