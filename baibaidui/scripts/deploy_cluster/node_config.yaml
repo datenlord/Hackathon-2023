@@ -1,0 +1,30 @@
+nodes: 
+  1: 
+    addr: 192.168.31.162:2500
+    spec: [router]
+  2: 
+    addr: 192.168.31.162:2505
+    spec: [fs]
+  3: 
+    addr: 192.168.31.87:2500
+    spec: [fs]
+  4: 
+    addr: 192.168.31.87:2505
+    spec: [fs]
+  5: 
+    addr: 192.168.31.96:2500
+    spec: [s3]
+  6: 
+    addr: 192.168.31.96:2505
+    spec: [fs]
+  7: 
+    addr: 192.168.31.96:2510
+    spec: [fs]
+  8: 
+    addr: 192.168.31.87:2510
+    spec: [fs]
+  9: 
+    addr: 192.168.31.162:2510
+    spec: [fs]
+random_seed: hhhhh
+block_size: 1024

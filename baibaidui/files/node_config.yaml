@@ -1,0 +1,12 @@
+nodes: 
+  1: 
+    addr: 127.0.0.1:2000
+    spec: [router,fs] # master: collect the cache info
+  2: 
+    addr: 127.0.0.1:3000
+    spec: [s3]
+  3: 
+    addr: 127.0.0.1:4000
+    spec: [fs] # worker: upload the cache info
+random_seed: hhhhh
+block_size: 1024

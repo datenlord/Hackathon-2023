@@ -1,0 +1,16 @@
+syntax = "proto3";
+package metric;
+
+message RscMetric{
+    float cpu_used = 1;
+    float mem_used = 2;
+    float cpu_all = 3;
+    float mem_all = 4;
+    float avg_block_time = 5;
+    float rps = 6;
+    float local_read_rate=7;
+    float remote_read_rate=8;
+    float s3_read_rate=9;
+    float hit_query_time=10;
+}
+
