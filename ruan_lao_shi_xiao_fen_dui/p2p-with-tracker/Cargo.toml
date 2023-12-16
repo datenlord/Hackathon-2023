@@ -1,0 +1,50 @@
+[package]
+name = "p2p-with-tracker"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# Http server
+# axum = { version = "0.7" }
+axum = { version = "0.6.0-rc.2", features = ["http2", "multipart"] }
+axum-server = { version = "0.4", features = ["tls-rustls"] }
+# axum-extra = { version = "0.9", features = ["typed-header"] }
+tower-http = { version = "0.3", features = ["full"] }
+hyper = { version = "0.14", features = ["full"] }
+byte-unit = "4.0"
+reqwest = { version="0.11", features=["json", "multipart"]}
+
+# Errors
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Object storage
+rust-s3 = {version = "0.34.0-rc4"}
+tokio = { version = "1.19.2", features = ["full"] }
+chrono = { version = "0.4.19", features = ["serde"] }
+
+# Logger
+tracing = { version = "0.1", features = ["max_level_debug", "release_max_level_info", "log"] }
+tracing-subscriber = "0.3"
+# Backtrace in panic hook
+backtrace = "0.3"
+
+# Generate uuid
+uuid = { version = "1.2", features = ["v4"] }
+rand = "0.8.4"
+
+# Config
+toml = "0.5"
+
+# Command
+clap = { version = "3.2", features = ["derive"] }
+
+# lazy_static
+lazy_static = "1.4"
+parking_lot = "0.11"

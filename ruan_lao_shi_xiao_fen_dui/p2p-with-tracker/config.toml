@@ -1,0 +1,18 @@
+[http]
+host = "127.0.0.1"
+trackerPort = 38080
+rangePortStart = 48000 # for node server port
+rangePortEnd = 49000
+cors = [ "localhost:38080" ] # CORS domains
+
+[p2p]
+pieceSize = 131072 # 128KB
+sessionExpireTime = 10 # seconds
+sessionCheckTime = 3 # seconds
+
+[s3]
+endpoint = "http://127.0.0.1:39000"
+bucket = "hackathon"
+region = ""
+accessKey = "hackathon"
+secretKey = "hackathon"
