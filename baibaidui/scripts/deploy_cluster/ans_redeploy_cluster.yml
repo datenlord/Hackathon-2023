@@ -1,0 +1,161 @@
+---
+- hosts: localhost
+  tasks:
+    - name: Get Project Name
+      shell: python3 scripts/saaf/project_name.py
+      register: prj_name_out
+      args:
+        chdir: ../..
+
+    - name: Set Project Name
+      set_fact:
+        PRJ_NAME: "{{prj_name_out.stdout_lines[0]}}"
+
+    - name: Debug PRJ_NAME
+      shell: echo "{{PRJ_NAME}}"
+
+    - name: Install All
+      include_tasks: ../install/_ans_install.yml
+
+    - name: Build the application on the master node
+      shell: cargo build --release
+
+    - name: Generate Docker Compose File
+      shell: python3 _gen_each_node_compose.py
+
+    - name: Remove docker Zip
+      file:
+        path: ../../docker.zip
+        state: absent
+
+    - name: Zip docker file
+      command: "zip -r docker.zip docker"
+      args:
+        chdir: ../..
+
+    - name: Remove scripts Zip
+      file:
+        path: ../../scripts.zip
+        state: absent
+
+    - name: Zip scripts file
+      command: "zip -r scripts.zip scripts"
+      args:
+        chdir: ../..
+- hosts: web
+  vars_prompt:
+    - name: build_env
+      prompt: "Do you want to rebuild the environment? (yes/no)"
+      private: false
+  tasks:
+    - name: Set Project Name
+      set_fact:
+        PRJ_NAME: "{{hostvars['localhost']['PRJ_NAME']}}"
+
+    - name: Debug file path
+      debug:
+        var: src
+
+    - name: Mkdir
+      shell: mkdir -p /root/{{PRJ_NAME}}_deploy/target/release/
+      become: yes
+
+    - name: Copy release to all nodes
+      copy:
+        src: ../../target/release/{{PRJ_NAME}}
+        dest: /root/{{PRJ_NAME}}_deploy/target/release/{{PRJ_NAME}}
+      become: yes
+
+    - name: Check if the Docker compose configuration file exists
+      stat:
+        path: "/root/{{PRJ_NAME}}_deploy/docker-compose.yml"
+      register: compose_file
+
+    - name: Docker compose down if the configuration file exists
+      command: docker-compose down
+      args:
+        chdir: "/root/{{PRJ_NAME}}_deploy"
+      become: yes
+      when: compose_file.stat.exists
+      ignore_errors: yes
+
+    - name: Copy compose_{ip}.yml to all nodes
+      copy:
+        src: ../deploy_cluster/compose_{{ ansible_host }}.yml
+        dest: /root/{{PRJ_NAME}}_deploy/docker-compose.yml
+      become: yes
+    - name: Copy node_config.yaml to all nodes
+      copy:
+        src: ../deploy_cluster/node_config.yaml
+        dest: /root/{{PRJ_NAME}}_deploy/node_config.yaml
+      become: yes
+    - name: Copy Cargo.toml to all nodes
+      copy:
+        src: ../../Cargo.toml
+        dest: /root/{{PRJ_NAME}}_deploy/Cargo.toml
+      become: yes
+    - name: Copy Docker scripts to all nodes
+      copy:
+        src: ../../docker.zip
+        dest: /root/{{PRJ_NAME}}_deploy/docker.zip
+      become: yes
+
+    - name: Unzip Docker scripts to all nodes
+      shell: rm -rf docker && unzip -q -o docker.zip && rm -f docker.zip && chmod -R 775 docker
+      args:
+        chdir: /root/{{PRJ_NAME}}_deploy
+      become: yes
+
+    - name: Copy scripts to all nodes
+      copy:
+        src: ../../scripts.zip
+        dest: /root/{{PRJ_NAME}}_deploy/scripts.zip
+      become: yes
+
+    - name: Unzip scripts to all nodes
+      shell: rm -rf scripts && unzip -q -o scripts.zip && rm -f scripts.zip && chmod -R 775 scripts
+      args:
+        chdir: /root/{{PRJ_NAME}}_deploy
+      become: yes
+
+    - name: Install docker
+      include_tasks: ../install/_ans_install_docker.yml
+
+    - name: Install pip
+      shell: apt install python3-pip -y
+      become: yes
+
+    - name: Install pip toml
+      shell: pip3 install toml
+      become: yes
+
+    - name: Generate random file
+      shell: mkdir -p files && cp scripts/deploy_cluster/node_config.yaml files/node_config.yaml && python3 scripts/generate_random_file.py
+      args:
+        chdir: /root/{{PRJ_NAME}}_deploy
+      become: yes
+
+    - name: Build the environment Docker image (conditionally)
+      command: ./docker/BaseEnv/build_image.sh
+      args:
+        chdir: /root/{{PRJ_NAME}}_deploy
+      become: yes
+      when: build_env == "yes"
+
+    - name: Build the application Docker image
+      command: python3 ./docker/SysNode/build_image.py
+      args:
+        chdir: /root/{{PRJ_NAME}}_deploy
+      become: yes
+
+    - name: docker-compose
+      command: docker-compose -v
+      args:
+        chdir: /root/{{PRJ_NAME}}_deploy
+      become: yes
+
+    - name: Docker compose up
+      command: docker-compose --compatibility up -d
+      args:
+        chdir: /root/{{PRJ_NAME}}_deploy
+      become: yes

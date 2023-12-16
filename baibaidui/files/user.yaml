@@ -1,0 +1,14 @@
+1:
+  access: loop
+  targets:
+  - mykbe.txt
+  - hrtqr.txt
+3:
+  access: loop
+  targets:
+  - mykbe.txt
+  - hrtqr.txt
+  - cyrsk.txt
+  - ngwrj.txt
+  - zytsk.txt
+  - hbuzi.txt

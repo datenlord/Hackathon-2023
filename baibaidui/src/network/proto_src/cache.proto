@@ -1,0 +1,33 @@
+syntax = "proto3";
+package cache;
+
+
+
+message GetCacheViewRequest{
+    string filename = 1;    
+    uint32 block_id = 2;
+    
+}
+
+message GetCacheViewResponse{
+    // load balance by offset the node_id
+    uint32 offset = 1;
+    repeated uint32 node_ids = 2;
+}
+
+message GetCacheRequest{
+    string filename = 1;
+    uint32 block_id = 2;
+}
+
+message GetCacheResponse{
+    bool is_hit = 1;
+    bytes data = 2;
+}
+
+message CacheTrans{
+    string filename = 1;
+    uint32 block_id = 2;
+    bool store = 3;
+    bool evict = 4;
+}
