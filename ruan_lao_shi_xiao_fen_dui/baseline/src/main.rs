@@ -13,7 +13,7 @@ async fn test_download(id:usize) -> Result<(), S3Error> {
     let bucket_name = "hackathon";
     let region = Region::Custom {
         region: "".to_owned(),
-        endpoint: "http://127.0.0.1:39000".to_owned(),
+        endpoint: "http://81.69.26.72:39000".to_owned(),
     };
     let credentials = Credentials::new(
         Some("hackathon".to_owned().as_str()),
@@ -57,7 +57,7 @@ async fn test_download(id:usize) -> Result<(), S3Error> {
             end = file_size;
         }
         let res = bucket.get_object_range(filename, start.try_into().unwrap(), Some(end.try_into().unwrap())).await.unwrap();
-        println!("get object range: {:?}", res);
+        // println!("get object range: {:?}", res);
         // buf.extend_from_slice(&res);
         start += step;
         end += step;
@@ -75,12 +75,14 @@ async fn test_download(id:usize) -> Result<(), S3Error> {
 async fn main() -> Result<(), S3Error>{
     let mut count = 0;
 
-    for j in 0..1 {
+    // Test 10 times
+    for j in 0..10 {
         let start_time = Instant::now();
 
         println!("Start multi download test... start_time: {:?}", start_time);
         let mut tasks = Vec::new();
-        for i in 0..1 {
+        // 10 tasks
+        for i in 0..10 {
             tasks.push(tokio::spawn(test_download(i)));
         }
         for task in tasks {

@@ -3,7 +3,7 @@ use std::io::prelude::*;
 use std::io::BufWriter;
 
 fn main() {
-    let file_size = 10 * 1024 * 1024; // 200MB
+    let file_size = 10 * 1024 * 1024; // 10MB
     let file_path = "output_10MB.txt";
 
     // 创建文件并打开写入模式
